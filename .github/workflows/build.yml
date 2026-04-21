@@ -99,9 +99,11 @@ jobs:
       - name: Commit version file
         if: steps.upstream.outputs.tag != steps.local.outputs.tag
         run: |
+          git fetch
+          git pull
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add last_built_version.txt
           git commit -m "build: ${{ steps.upstream.outputs.tag }}"
           git push
-#plsssssss work okay <3?
+#plsssssss work okay <3? Fabio Help me!!!!!
