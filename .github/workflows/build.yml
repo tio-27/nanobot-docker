@@ -49,6 +49,18 @@ jobs:
           git clone --depth 1 --branch ${{ steps.upstream.outputs.tag }} \
             https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
 
+      - name: Inject channel extras into Dockerfile
+        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        run: |
+          cat >> upstream/Dockerfile <<'EOF'
+
+          # Added by tio-27/nanobot-docker — install optional channels
+          USER root
+          RUN pip install --no-cache-dir --break-system-packages \
+              'nanobot-ai[discord,matrix,whatsapp]'
+          USER nanobot
+          EOF
+
       - name: Set up QEMU
         if: steps.upstream.outputs.tag != steps.local.outputs.tag
         uses: docker/setup-qemu-action@v3
