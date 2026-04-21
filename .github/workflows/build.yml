@@ -104,3 +104,4 @@ jobs:
           git add last_built_version.txt
           git commit -m "build: ${{ steps.upstream.outputs.tag }}"
           git push
+
