@@ -2,8 +2,8 @@ name: Build & Push nanobot
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # täglich 04:00 UTC
-  workflow_dispatch:      # manuell auslösbar 
+    - cron: '0 4 * * *'
+  workflow_dispatch:
 
 env:
   UPSTREAM_REPO: HKUDS/nanobot
@@ -19,58 +19,68 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get latest upstream release
         id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(curl -sf https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest \
-            | jq -r .tag_name)
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          TAG=$(gh release view --repo "${{ env.UPSTREAM_REPO }}" --json tagName -q .tagName)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Latest upstream: $TAG"
 
       - name: Get last built version
         id: local
         run: |
           if [ -f last_built_version.txt ]; then
-            echo "tag=$(cat last_built_version.txt)" >> $GITHUB_OUTPUT
+            echo "tag=$(cat last_built_version.txt)" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=none" >> $GITHUB_OUTPUT
+            echo "tag=none" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Skip if already up to date
-        if: steps.upstream.outputs.tag == steps.local.outputs.tag
+      - name: Check if build needed
+        id: check
         run: |
-          echo "Already at ${{ steps.upstream.outputs.tag }}, skipping build."
-          exit 0
+          if [ "${{ steps.upstream.outputs.tag }}" = "${{ steps.local.outputs.tag }}" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Already at ${{ steps.upstream.outputs.tag }}, skipping."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Building ${{ steps.upstream.outputs.tag }} (was: ${{ steps.local.outputs.tag }})"
+          fi
 
       - name: Clone upstream at release tag
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true'
         run: |
-          git clone --depth 1 --branch ${{ steps.upstream.outputs.tag }} \
-            https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
+          git clone --depth 1 --branch "${{ steps.upstream.outputs.tag }}" \
+            "https://github.com/${{ env.UPSTREAM_REPO }}.git" upstream
 
-      - name: Inject channel extras into Dockerfile
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+      - name: Inject tzdata and channel extras into Dockerfile
+        if: steps.check.outputs.needed == 'true'
         run: |
           cat >> upstream/Dockerfile <<'EOF'
-
-          # Added by tio-27/nanobot-docker — install optional channels
+          # Added by tio-27/nanobot-docker — install tzdata + optional channels
           USER root
+          RUN apt-get update && \
+              apt-get install -y --no-install-recommends tzdata && \
+              rm -rf /var/lib/apt/lists/*
           RUN pip install --no-cache-dir --break-system-packages \
               'nanobot-ai[discord,matrix,whatsapp]'
           USER nanobot
           EOF
 
       - name: Set up QEMU
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -78,12 +88,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./upstream
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ steps.upstream.outputs.tag }}
@@ -92,18 +104,13 @@ jobs:
             org.opencontainers.image.upstream=https://github.com/${{ env.UPSTREAM_REPO }}
             org.opencontainers.image.version=${{ steps.upstream.outputs.tag }}
 
-      - name: Save built version
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
-        run: echo "${{ steps.upstream.outputs.tag }}" > last_built_version.txt
-
       - name: Commit version file
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag
+        if: steps.check.outputs.needed == 'true' && success()
         run: |
-          git fetch
-          git pull
+          echo "${{ steps.upstream.outputs.tag }}" > last_built_version.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash
           git add last_built_version.txt
           git commit -m "build: ${{ steps.upstream.outputs.tag }}"
           git push
-#plsssssss work okay <3? Fabio Help me!!!!!
